@@ -595,8 +595,8 @@ namespace internal {
   F(StringIteratorProtector, 0, 1)            \
   F(SystemBreak, 0, 1)                        \
   F(TakeHeapSnapshot, -1, 1)                  \
-  F(TraceEnter, 0, 1)                         \
-  F(TraceExit, 1, 1)                          \
+  F(TraceEnter, 2, 1)                         \
+  F(TraceExit, 2, 1)                          \
   F(TurbofanStaticAssert, 1, 1)               \
   F(TypedArraySpeciesProtector, 0, 1)         \
   F(WaitForBackgroundOptimization, 0, 1)      \

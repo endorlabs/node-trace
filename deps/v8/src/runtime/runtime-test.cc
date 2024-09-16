@@ -4,8 +4,11 @@
 
 #include <stdio.h>
 
+#include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <memory>
+#include <vector>
 
 #include "include/v8-function.h"
 #include "include/v8-profiler.h"
@@ -412,16 +415,16 @@ RUNTIME_FUNCTION(Runtime_BenchMaglev) {
     HandleScope handle_scope(isolate);
     Maglev::Compile(isolate, function);
   }
-  PrintF("Maglev compile time: %g ms!\n",
+  // PrintF("Maglev compile time: %g ms!\n",
          timer.Elapsed().InMillisecondsF() / count);
 
-  function->set_code(*code);
+         function->set_code(*code);
 
-  return ReadOnlyRoots(isolate).undefined_value();
+         return ReadOnlyRoots(isolate).undefined_value();
 }
 #else
 RUNTIME_FUNCTION(Runtime_BenchMaglev) {
-  PrintF("Maglev is not enabled.\n");
+  // PrintF("Maglev is not enabled.\n");
   return ReadOnlyRoots(isolate).undefined_value();
 }
 #endif  // V8_ENABLE_MAGLEV
@@ -483,7 +486,7 @@ RUNTIME_FUNCTION(Runtime_OptimizeMaglevOnNextCall) {
 }
 #else
 RUNTIME_FUNCTION(Runtime_OptimizeMaglevOnNextCall) {
-  PrintF("Maglev is not enabled.\n");
+  // PrintF("Maglev is not enabled.\n");
   return ReadOnlyRoots(isolate).undefined_value();
 }
 #endif  // V8_ENABLE_MAGLEV
@@ -1059,30 +1062,6 @@ class FileOutputStream : public v8::OutputStream {
 };
 
 RUNTIME_FUNCTION(Runtime_TakeHeapSnapshot) {
-  if (v8_flags.fuzzing) {
-    // We don't want to create snapshots in fuzzers.
-    return ReadOnlyRoots(isolate).undefined_value();
-  }
-
-  std::string filename = "heap.heapsnapshot";
-
-  if (args.length() >= 1) {
-    HandleScope hs(isolate);
-    Handle<String> filename_as_js_string = args.at<String>(0);
-    std::unique_ptr<char[]> buffer = filename_as_js_string->ToCString();
-    filename = std::string(buffer.get());
-  }
-
-  HeapProfiler* heap_profiler = isolate->heap_profiler();
-  // Since this API is intended for V8 devs, we do not treat globals as roots
-  // here on purpose.
-  v8::HeapProfiler::HeapSnapshotOptions options;
-  options.numerics_mode = v8::HeapProfiler::NumericsMode::kExposeNumericValues;
-  options.snapshot_mode = v8::HeapProfiler::HeapSnapshotMode::kExposeInternals;
-  HeapSnapshot* snapshot = heap_profiler->TakeSnapshot(options);
-  FileOutputStream stream(filename.c_str());
-  HeapSnapshotJSONSerializer serializer(snapshot);
-  serializer.Serialize(&stream);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
@@ -1111,21 +1090,6 @@ static void DebugPrintImpl(MaybeObject maybe_object, std::ostream& os) {
 
 RUNTIME_FUNCTION(Runtime_DebugPrint) {
   SealHandleScope shs(isolate);
-
-  // This is exposed to tests / fuzzers; handle variable arguments gracefully.
-  std::unique_ptr<std::ostream> output_stream(new StdoutStream());
-  if (args.length() >= 2) {
-    // Args: object, stream.
-    if (args[1].IsSmi()) {
-      int output_int = Smi::cast(args[1]).value();
-      if (output_int == fileno(stderr)) {
-        output_stream.reset(new StderrStream());
-      }
-    }
-  }
-
-  MaybeObject maybe_object(*args.address_of_arg_at(0));
-  DebugPrintImpl(maybe_object, *output_stream.get());
   return args[0];
 }
 
@@ -1133,17 +1097,6 @@ RUNTIME_FUNCTION(Runtime_DebugPrintPtr) {
   SealHandleScope shs(isolate);
   StdoutStream os;
   DCHECK_EQ(1, args.length());
-
-  MaybeObject maybe_object(*args.address_of_arg_at(0));
-  if (!maybe_object.IsCleared()) {
-    Object object = maybe_object.GetHeapObjectOrSmi();
-    size_t pointer;
-    if (object.ToIntegerIndex(&pointer)) {
-      MaybeObject from_pointer(static_cast<Address>(pointer));
-      DebugPrintImpl(from_pointer, os);
-    }
-  }
-  // We don't allow the converted pointer to leak out to JavaScript.
   return args[0];
 }
 
@@ -1153,15 +1106,15 @@ RUNTIME_FUNCTION(Runtime_PrintWithNameForAssert) {
 
   auto name = String::cast(args[0]);
 
-  PrintF(" * ");
+  // PrintF(" * ");
   StringCharacterStream stream(name);
   while (stream.HasMore()) {
     uint16_t character = stream.GetNext();
-    PrintF("%c", character);
+    // PrintF("%c", character);
   }
-  PrintF(": ");
-  args[1].ShortPrint();
-  PrintF("\n");
+  // PrintF(": ");
+  // args[1].ShortPrint();
+  // PrintF("\n");
 
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -1169,27 +1122,12 @@ RUNTIME_FUNCTION(Runtime_PrintWithNameForAssert) {
 RUNTIME_FUNCTION(Runtime_DebugTrace) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(0, args.length());
-  isolate->PrintStack(stdout);
+  // isolate->PrintStack(stdout);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
 RUNTIME_FUNCTION(Runtime_DebugTrackRetainingPath) {
   HandleScope scope(isolate);
-  DCHECK_LE(1, args.length());
-  DCHECK_GE(2, args.length());
-  CHECK(v8_flags.track_retaining_path);
-  Handle<HeapObject> object = args.at<HeapObject>(0);
-  RetainingPathOption option = RetainingPathOption::kDefault;
-  if (args.length() == 2) {
-    Handle<String> str = args.at<String>(1);
-    const char track_ephemeron_path[] = "track-ephemeron-path";
-    if (str->IsOneByteEqualTo(base::StaticCharVector(track_ephemeron_path))) {
-      option = RetainingPathOption::kTrackEphemeronPath;
-    } else {
-      CHECK_EQ(str->length(), 0);
-    }
-  }
-  isolate->heap()->AddRetainingPathTarget(object, option);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
@@ -1218,7 +1156,7 @@ RUNTIME_FUNCTION(Runtime_GlobalPrint) {
   StringCharacterStream stream(string);
   while (stream.HasMore()) {
     uint16_t character = stream.GetNext();
-    PrintF(output_stream, "%c", character);
+    // PrintF(output_stream, "%c", character);
   }
   fflush(output_stream);
   return string;
@@ -1251,7 +1189,7 @@ RUNTIME_FUNCTION(Runtime_Abort) {
   DCHECK_EQ(1, args.length());
   int message_id = args.smi_value_at(0);
   const char* message = GetAbortReason(static_cast<AbortReason>(message_id));
-  base::OS::PrintError("abort: %s\n", message);
+  // base::OS::PrintError("abort: %s\n", message);
   isolate->PrintStack(stderr);
   base::OS::Abort();
   UNREACHABLE();
@@ -1262,7 +1200,8 @@ RUNTIME_FUNCTION(Runtime_AbortJS) {
   DCHECK_EQ(1, args.length());
   Handle<String> message = args.at<String>(0);
   if (v8_flags.disable_abortjs) {
-    base::OS::PrintError("[disabled] abort: %s\n", message->ToCString().get());
+    // base::OS::PrintError("[disabled] abort: %s\n",
+    // message->ToCString().get());
     return Object();
   }
   base::OS::PrintError("abort: %s\n", message->ToCString().get());
@@ -1302,43 +1241,108 @@ RUNTIME_FUNCTION(Runtime_DisassembleFunction) {
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
-namespace {
+std::ofstream outFile;
+uint32_t collectStackDepth = 0;
+bool isInit = false;
 
-int StackSize(Isolate* isolate) {
-  int n = 0;
-  for (JavaScriptStackFrameIterator it(isolate); !it.done(); it.Advance()) n++;
-  return n;
-}
+constexpr size_t BUFFER_SIZE = 5 * 1024 * 1024;  // 5 MB buffer
+std::array<char, BUFFER_SIZE> buffer;
+size_t bufferPos = 0;
+std::map<StackFrameId, int> frameMap;
 
-void PrintIndentation(int stack_size) {
-  const int max_display = 80;
-  if (stack_size <= max_display) {
-    PrintF("%4d:%*s", stack_size, stack_size, "");
-  } else {
-    PrintF("%4d:%*s", stack_size, max_display, "...");
+void FlushBuffer() {
+  if (bufferPos > 0) {
+    outFile.write(buffer.data(), bufferPos);
+    bufferPos = 0;
   }
 }
 
-}  // namespace
+void SaveAtExit() {
+  FlushBuffer();
+  if (outFile.is_open()) {
+    outFile.close();
+  }
+}
+
+inline void AppendToBuffer(const char* data, size_t length) {
+  if (bufferPos + length > BUFFER_SIZE) {
+    FlushBuffer();
+  }
+  std::memcpy(buffer.data() + bufferPos, data, length);
+  bufferPos += length;
+}
+
+inline void AppendCharToBuffer(char c) {
+  if (bufferPos + 1 > BUFFER_SIZE) {
+    FlushBuffer();
+  }
+  buffer[bufferPos++] = c;
+}
+
+// Fast integer to string conversion
+inline void AppendIntToBuffer(uint64_t value) {
+  char tmp[20];
+  char* p = tmp + 19;
+  do {
+    *p-- = '0' + (value % 10);
+    value /= 10;
+  } while (value > 0);
+  AppendToBuffer(p + 1, tmp + 19 - p);
+}
 
 RUNTIME_FUNCTION(Runtime_TraceEnter) {
   SealHandleScope shs(isolate);
-  DCHECK_EQ(0, args.length());
-  PrintIndentation(StackSize(isolate));
-  JavaScriptFrame::PrintTop(isolate, stdout, true, false);
-  PrintF(" {\n");
+  DCHECK_EQ(1, args.length());
+
+  if (!isInit) {
+    isInit = true;
+    outFile.open("cg.tsv", std::ios::out | std::ios::binary);
+    outFile.rdbuf()->pubsetbuf(nullptr, 0);  // Disable stream buffering
+    collectStackDepth = NumberToUint32(args[0]);
+    std::atexit(SaveAtExit);
+  }
+
+  uint32_t funcId = NumberToUint32(args[1]);
+
+  if (collectStackDepth > 1) {
+    JavaScriptStackFrameIterator it(isolate);
+    int level = 0;
+    while (!it.done()) {
+      if (level > 0) {
+        AppendCharToBuffer(',');
+      }
+      StackFrameId frameId = it.frame()->id();
+      if (frameMap.find(frameId) != frameMap.end() ||
+          level > collectStackDepth) {
+        AppendIntToBuffer(frameMap[frameId]);
+        break;
+      }
+      int new_frame_id = frameMap.size();
+      frameMap[frameId] = new_frame_id;
+      AppendIntToBuffer(new_frame_id);
+      ++level;
+      it.Advance();
+    }
+    AppendCharToBuffer('\t');
+  } else {
+    AppendCharToBuffer('I');
+  }
+  AppendIntToBuffer(funcId);
+  AppendCharToBuffer('\n');
+
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
 RUNTIME_FUNCTION(Runtime_TraceExit) {
   SealHandleScope shs(isolate);
-  DCHECK_EQ(1, args.length());
-  Object obj = args[0];
-  PrintIndentation(StackSize(isolate));
-  PrintF("} -> ");
-  obj.ShortPrint();
-  PrintF("\n");
-  return obj;  // return TOS
+  DCHECK_EQ(2, args.length());
+  if (collectStackDepth < 2) {
+    uint32_t funcId = NumberToUint32(args[0]);
+    AppendCharToBuffer('O');
+    AppendIntToBuffer(funcId);
+    AppendCharToBuffer('\n');
+  }
+  return args[1];
 }
 
 RUNTIME_FUNCTION(Runtime_HaveSameMap) {
@@ -1378,28 +1382,6 @@ RUNTIME_FUNCTION(Runtime_InYoungGeneration) {
 
 // Force pretenuring for the allocation site the passed object belongs to.
 RUNTIME_FUNCTION(Runtime_PretenureAllocationSite) {
-  DisallowGarbageCollection no_gc;
-
-  if (args.length() != 1) return CrashUnlessFuzzing(isolate);
-  Object arg = args[0];
-  if (!arg.IsJSObject()) return CrashUnlessFuzzing(isolate);
-  JSObject object = JSObject::cast(arg);
-
-  Heap* heap = object.GetHeap();
-  if (!heap->InYoungGeneration(object)) {
-    // Object is not in new space, thus there is no memento and nothing to do.
-    return ReturnFuzzSafe(ReadOnlyRoots(isolate).false_value(), isolate);
-  }
-
-  PretenuringHandler* pretenuring_handler = heap->pretenuring_handler();
-  AllocationMemento memento =
-      pretenuring_handler
-          ->FindAllocationMemento<PretenuringHandler::kForRuntime>(object.map(),
-                                                                   object);
-  if (memento.is_null())
-    return ReturnFuzzSafe(ReadOnlyRoots(isolate).false_value(), isolate);
-  AllocationSite site = memento.GetAllocationSite();
-  pretenuring_handler->PretenureAllocationSiteOnNextCollection(site);
   return ReturnFuzzSafe(ReadOnlyRoots(isolate).true_value(), isolate);
 }
 
@@ -1593,16 +1575,6 @@ RUNTIME_FUNCTION(Runtime_HeapObjectVerify) {
   HandleScope shs(isolate);
   DCHECK_EQ(1, args.length());
   Handle<Object> object = args.at(0);
-#ifdef VERIFY_HEAP
-  object->ObjectVerify(isolate);
-#else
-  CHECK(object->IsObject());
-  if (object->IsHeapObject()) {
-    CHECK(HeapObject::cast(*object).map().IsMap());
-  } else {
-    CHECK(object->IsSmi());
-  }
-#endif
   return isolate->heap()->ToBoolean(true);
 }
 
@@ -1621,9 +1593,6 @@ RUNTIME_FUNCTION(Runtime_TypedArrayMaxLength) {
 RUNTIME_FUNCTION(Runtime_CompleteInobjectSlackTracking) {
   HandleScope scope(isolate);
   DCHECK_EQ(1, args.length());
-
-  Handle<JSObject> object = args.at<JSObject>(0);
-  MapUpdater::CompleteInobjectSlackTracking(isolate, object->map());
 
   return ReadOnlyRoots(isolate).undefined_value();
 }
@@ -1645,50 +1614,6 @@ RUNTIME_FUNCTION(Runtime_EnableCodeLoggingForTesting) {
   // The {NoopListener} currently does nothing on any callback, but reports
   // {true} on {is_listening_to_code_events()}. Feel free to add assertions to
   // any method to further test the code logging callbacks.
-  class NoopListener final : public LogEventListener {
-    void CodeCreateEvent(CodeTag tag, Handle<AbstractCode> code,
-                         const char* name) final {}
-    void CodeCreateEvent(CodeTag tag, Handle<AbstractCode> code,
-                         Handle<Name> name) final {}
-    void CodeCreateEvent(CodeTag tag, Handle<AbstractCode> code,
-                         Handle<SharedFunctionInfo> shared,
-                         Handle<Name> script_name) final {}
-    void CodeCreateEvent(CodeTag tag, Handle<AbstractCode> code,
-                         Handle<SharedFunctionInfo> shared,
-                         Handle<Name> script_name, int line, int column) final {
-    }
-#if V8_ENABLE_WEBASSEMBLY
-    void CodeCreateEvent(CodeTag tag, const wasm::WasmCode* code,
-                         wasm::WasmName name, const char* source_url,
-                         int code_offset, int script_id) final {}
-#endif  // V8_ENABLE_WEBASSEMBLY
-
-    void CallbackEvent(Handle<Name> name, Address entry_point) final {}
-    void GetterCallbackEvent(Handle<Name> name, Address entry_point) final {}
-    void SetterCallbackEvent(Handle<Name> name, Address entry_point) final {}
-    void RegExpCodeCreateEvent(Handle<AbstractCode> code,
-                               Handle<String> source) final {}
-    void CodeMoveEvent(InstructionStream from, InstructionStream to) final {}
-    void BytecodeMoveEvent(BytecodeArray from, BytecodeArray to) final {}
-    void SharedFunctionInfoMoveEvent(Address from, Address to) final {}
-    void NativeContextMoveEvent(Address from, Address to) final {}
-    void CodeMovingGCEvent() final {}
-    void CodeDisableOptEvent(Handle<AbstractCode> code,
-                             Handle<SharedFunctionInfo> shared) final {}
-    void CodeDeoptEvent(Handle<Code> code, DeoptimizeKind kind, Address pc,
-                        int fp_to_sp_delta) final {}
-    void CodeDependencyChangeEvent(Handle<Code> code,
-                                   Handle<SharedFunctionInfo> shared,
-                                   const char* reason) final {}
-    void WeakCodeClearEvent() final {}
-
-    bool is_listening_to_code_events() final { return true; }
-  };
-  static base::LeakyObject<NoopListener> noop_listener;
-#if V8_ENABLE_WEBASSEMBLY
-  wasm::GetWasmEngine()->EnableCodeLogging(isolate);
-#endif  // V8_ENABLE_WEBASSEMBLY
-  isolate->logger()->AddListener(noop_listener.get());
   return ReadOnlyRoots(isolate).undefined_value();
 }
 

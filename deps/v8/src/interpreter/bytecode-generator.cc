@@ -1393,7 +1393,73 @@ void BytecodeGenerator::GenerateBytecode(uintptr_t stack_limit) {
   DCHECK(builder()->RemainderOfBlockIsDead());
 }
 
+// the function information
+std::vector<std::string> funcs;
+// the function information
+std::map<std::string, int> funcMap;
+// the incremental ID of the functions
+int funcID = 0;
+// the depth of the stack to collect
+int stackDepth = 2;
+// should node functions be traced
+bool traceNode = false;
+
+bool isInit = false;
+void CleanupAtExit() {
+  // Open the file with the constructed filename
+  FILE* cgFile = fopen("func.tsv", "w");
+  // fprintf(cgFile, "stack\tfunc_id\n");
+  for (const auto& cg : funcs) {
+    fprintf(cgFile, "%s\n", cg.c_str());
+  }
+  fclose(cgFile);
+}
+
+void create_and_add_func_name(uint32_t func_id, const FunctionLiteral* literal,
+                              bool isConstructor, const char* function_key) {
+  // Pre-calculate the total length of the string to avoid reallocations
+  size_t total_length =
+      20;  // Estimated length for func_id, start_position, and end_position
+  const std::string& debug_name = literal->GetDebugName().get();
+  total_length += debug_name.length();
+  if (isConstructor) {
+    total_length += 4;  // "new "
+  }
+  total_length += std::strlen(function_key);
+  total_length += 5;  // 5 tab characters
+
+  // Create a single string with the calculated capacity
+  std::string funcName;
+  funcName.reserve(total_length);
+
+  // Append func_id
+  funcName.append(std::to_string(func_id));
+  funcName.push_back('\t');
+
+  // Append name
+  if (isConstructor) {
+    funcName.append("new ");
+  }
+  funcName.append(debug_name);
+  funcName.push_back('\t');
+
+  // Append function_key
+  funcName.append(function_key);
+
+  // Add to funcs vector
+  funcs.push_back(std::move(funcName));
+}
+
 void BytecodeGenerator::GenerateBytecodeBody() {
+  if (!isInit) {
+    auto traceDepthEnv = std::getenv("TRACE_DEPTH");
+    if (traceDepthEnv) {
+      stackDepth = std::stoi(traceDepthEnv);
+    }
+    isInit = true;
+    traceNode = std::getenv("TRACE_ALL") ? true : false;
+    atexit(CleanupAtExit);
+  }
   // Build the arguments object if it is used.
   VisitArgumentsObject(closure_scope()->arguments());
 
@@ -1416,9 +1482,6 @@ void BytecodeGenerator::GenerateBytecodeBody() {
     BuildGeneratorObjectVariableInitialization();
   }
 
-  // Emit tracing call if requested to do so.
-  if (v8_flags.trace) builder()->CallRuntime(Runtime::kTraceEnter);
-
   // Increment the function-scope block coverage counter.
   BuildIncrementBlockCoverageCounterIfEnabled(literal, SourceRangeKind::kBody);
 
@@ -1434,8 +1497,10 @@ void BytecodeGenerator::GenerateBytecodeBody() {
   // Emit initializing assignments for module namespace imports (if any).
   VisitModuleNamespaceImports();
 
+  bool isConstructor = false;
   // The derived constructor case is handled in VisitCallSuper.
   if (IsBaseConstructor(function_kind())) {
+    isConstructor = true;
     if (literal->class_scope_has_private_brand()) {
       ClassScope* scope = info()->scope()->outer_scope()->AsClassScope();
       DCHECK_NOT_NULL(scope->brand());
@@ -1448,6 +1513,36 @@ void BytecodeGenerator::GenerateBytecodeBody() {
     }
   }
 
+  // Emit tracing call if requested to do so.
+  if (!script_.is_null() && script_->name().IsString()) {
+    // Only trace js code
+    std::string path = String::cast(script_->name())
+                           .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
+                           .get();
+    bool toTrace = traceNode ? true : path.find("node:") != 0;
+    if (toTrace) {
+      int start_position = literal->start_position();
+      int end_position = literal->end_position();
+      std::string functionKey = std::to_string(start_position) + "\t" +
+                                std::to_string(end_position) + "\t" + path;
+      int func_id = -1;
+      if (funcMap.find(functionKey) == funcMap.end()) {
+        func_id = funcID++;
+        funcMap[functionKey] = func_id;
+        create_and_add_func_name(func_id, literal, isConstructor,
+                                 functionKey.c_str());
+      } else {
+        func_id = funcMap[functionKey];
+      }
+      RegisterList args = register_allocator()->NewRegisterList(2);
+      builder()
+          ->LoadLiteral(func_id)
+          .StoreAccumulatorInRegister(args[1])
+          .LoadLiteral(stackDepth)
+          .StoreAccumulatorInRegister(args[0])
+          .CallRuntime(Runtime::kTraceEnter, args);
+    }
+  }
   // Visit statements in the function body.
   VisitStatements(literal->body());
 
@@ -1457,6 +1552,41 @@ void BytecodeGenerator::GenerateBytecodeBody() {
     builder()->LoadUndefined();
     BuildReturn(literal->return_position());
   }
+}
+
+void BytecodeGenerator::BuildReturn(int source_position) {
+  // only trace return if the stack is not collected
+  if (!script_.is_null() && script_->name().IsString()) {
+    std::string path = String::cast(script_->name())
+                           .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
+                           .get();
+    bool toTrace = traceNode ? true : path.find("node:") != 0;
+    if (toTrace && stackDepth < 2) {
+      auto literal = info()->literal();
+      int start_position = literal->start_position();
+      int end_position = literal->end_position();
+      std::string functionKey = std::to_string(start_position) + "\t" +
+                                std::to_string(end_position) + "\t" + path;
+      int func_id = funcMap[functionKey];
+      RegisterAllocationScope register_scope(this);
+      // Runtime returns {result} value, preserving accumulator.
+      RegisterList result = register_allocator()->NewRegisterList(2);
+      builder()
+          ->StoreAccumulatorInRegister(result[1])
+          .LoadLiteral(func_id)
+          .StoreAccumulatorInRegister(result[0])
+          .CallRuntime(Runtime::kTraceExit, result);
+    }
+  }
+  // if (v8_flags.trace) {
+  //   RegisterAllocationScope register_scope(this);
+  //   Register result = register_allocator()->NewRegister();
+  //   // Runtime returns {result} value, preserving accumulator.
+  //   builder()->StoreAccumulatorInRegister(result).CallRuntime(
+  //       Runtime::kTraceExit, result);
+  // }
+  builder()->SetStatementPosition(source_position);
+  builder()->Return();
 }
 
 void BytecodeGenerator::AllocateTopLevelRegisters() {
@@ -3177,21 +3307,21 @@ void BytecodeGenerator::VisitObjectLiteral(ObjectLiteral* expr) {
     }
   }
 
-    // Define accessors, using only a single call to the runtime for each pair
-    // of corresponding getters and setters.
-    object_literal_context_scope.SetEnteredIf(true);
-    for (auto accessors : accessor_table.ordered_accessors()) {
-      RegisterAllocationScope inner_register_scope(this);
-      RegisterList args = register_allocator()->NewRegisterList(5);
-      builder()->MoveRegister(literal, args[0]);
-      VisitForRegisterValue(accessors.first, args[1]);
-      VisitLiteralAccessor(accessors.second->getter, args[2]);
-      VisitLiteralAccessor(accessors.second->setter, args[3]);
-      builder()
-          ->LoadLiteral(Smi::FromInt(NONE))
-          .StoreAccumulatorInRegister(args[4])
-          .CallRuntime(Runtime::kDefineAccessorPropertyUnchecked, args);
-    }
+  // Define accessors, using only a single call to the runtime for each pair
+  // of corresponding getters and setters.
+  object_literal_context_scope.SetEnteredIf(true);
+  for (auto accessors : accessor_table.ordered_accessors()) {
+    RegisterAllocationScope inner_register_scope(this);
+    RegisterList args = register_allocator()->NewRegisterList(5);
+    builder()->MoveRegister(literal, args[0]);
+    VisitForRegisterValue(accessors.first, args[1]);
+    VisitLiteralAccessor(accessors.second->getter, args[2]);
+    VisitLiteralAccessor(accessors.second->setter, args[3]);
+    builder()
+        ->LoadLiteral(Smi::FromInt(NONE))
+        .StoreAccumulatorInRegister(args[4])
+        .CallRuntime(Runtime::kDefineAccessorPropertyUnchecked, args);
+  }
 
   // Object literals have two parts. The "static" part on the left contains no
   // computed property names, and so we can compute its map ahead of time; see
@@ -3680,18 +3810,6 @@ void BytecodeGenerator::BuildVariableLoadForAccumulatorValue(
     Variable* variable, HoleCheckMode hole_check_mode, TypeofMode typeof_mode) {
   ValueResultScope accumulator_result(this);
   BuildVariableLoad(variable, hole_check_mode, typeof_mode);
-}
-
-void BytecodeGenerator::BuildReturn(int source_position) {
-  if (v8_flags.trace) {
-    RegisterAllocationScope register_scope(this);
-    Register result = register_allocator()->NewRegister();
-    // Runtime returns {result} value, preserving accumulator.
-    builder()->StoreAccumulatorInRegister(result).CallRuntime(
-        Runtime::kTraceExit, result);
-  }
-  builder()->SetStatementPosition(source_position);
-  builder()->Return();
 }
 
 void BytecodeGenerator::BuildAsyncReturn(int source_position) {
