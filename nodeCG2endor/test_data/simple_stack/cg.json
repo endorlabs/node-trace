@@ -1,0 +1,30 @@
+{
+  "packageName": "<name>@<version>",
+  "createTime": "",
+  "functionMap": {
+    "0": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/()",
+    "1": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/()",
+    "2": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/one()",
+    "3": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/two()",
+    "4": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/three()"
+  },
+  "callgraph": {
+    "1": {
+      "nodes": [
+        2,
+        4
+      ]
+    },
+    "2": {
+      "nodes": [
+        3,
+        4
+      ]
+    },
+    "3": {
+      "nodes": [
+        4
+      ]
+    }
+  }
+}

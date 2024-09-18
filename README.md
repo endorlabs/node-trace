@@ -4,7 +4,9 @@ This repository contains a fork of Node.js v20 (commit: efbec04208a3c8588d4e7f07
 
 ## Overview
 
-Node.js Trace enhances the standard Node.js runtime to generate detailed call graphs during execution. This fork produces two primary output files:
+Node.js Trace enhances the standard Node.js runtime to generate detailed call graphs during execution. 
+Each node process will create a `cg.tsv` and `funcs.tsv`. Those files can be combained into one callgraph using the script in `nodeCG2endor`.
+This fork produces two primary output files:
 
 1. `cg.tsv`: Contains the call graph data
 2. `funcs.tsv`: Contains function information (name, position, and path)
@@ -24,7 +26,7 @@ Configure Node.js Trace using environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TRACE_ALL` | Set to `1` to trace all functions, including Node.js internals | `0` |
-| `TRACE_DEPTH` | Maximum depth of the collected stack (deeper = slower) | `Infinity` |
+| `TRACE_DEPTH` | Maximum depth of the collected stack (deeper = slower) | `100` |
 
 **Note**: If `TRACE_DEPTH` is set to a value less than 2, the call graph will be based on function entry and exit points.
 
@@ -47,8 +49,118 @@ Configure Node.js Trace using environment variables:
    TRACE_ALL=1 TRACE_DEPTH=10 ./node your-app.js
    ```
 
+However, the recommend usage is to put this version of node inside your path since some testing framework or typescript are lunching multiple processes of node.
+Adding node in the path garantee that the full execution will be executed.
+
 4. Analyze the generated `cg.tsv` and `funcs.tsv` files.
 
+
+## Format
+
+### `func.tsv`
+```tsv
+func id    name    func file id    start    end    path
+```
+```tsv
+0               0       0       195     /private/tmp/js_vuln_test/simple.js
+1               1       0       195     /private/tmp/js_vuln_test/simple.js
+2       one     2       12      60      /private/tmp/js_vuln_test/simple.js
+3       two     3       74      109     /private/tmp/js_vuln_test/simple.js
+4       three   4       125     166     /private/tmp/js_vuln_test/simple.js
+```
+
+
+### `cg.tsv`
+
+Stack mode
+```tsv
+stack IDs   func id
+```
+
+```tsv
+0,1,2,0	0
+4,0	1
+5,4	2
+6,5	3
+6	3
+4	1
+5	2
+6	3
+6	3
+5	3
+4	3
+```
+
+IN OUT mode
+
+```tsv
+I0
+I1
+I2
+I3
+O3
+I3
+O3
+O2
+O1
+I1
+I2
+I3
+O3
+I3
+O3
+O2
+I3
+O3
+O1
+I3
+O3
+O0
+```
+
+## Convert Node CG to Endor CG
+
+The folder `nodeCG2endor` contains the script to convert the collected callgraph to Endor callgraph format.
+The script will combine all the `cg.tsv` and `func.tsv` present in the project folder. 
+
+```bash
+python3 node nodeCG2endor/nodeCG2endor.py <path_to_project>
+```
+
+### Output
+
+```json
+{
+  "packageName": "<name>@<version>",
+  "createTime": "",
+  "functionMap": {
+    "0": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/()",
+    "1": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/()",
+    "2": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/one()",
+    "3": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/two()",
+    "4": "javascript://js_vuln_test$1.0.0/[js_vuln_test:1.0.0:js_vuln_test/simple]/three()"
+  },
+  "callgraph": {
+    "1": {
+      "nodes": [
+        2,
+        4
+      ]
+    },
+    "2": {
+      "nodes": [
+        3,
+        4
+      ]
+    },
+    "3": {
+      "nodes": [
+        4
+      ]
+    }
+  }
+}
+```
 ## Performance Considerations
 
 - Enabling tracing will impact performance. The impact varies based on the chosen mode and trace depth.

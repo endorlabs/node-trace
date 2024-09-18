@@ -1400,14 +1400,16 @@ std::map<std::string, int> funcMap;
 // the incremental ID of the functions
 int funcID = 0;
 // the depth of the stack to collect
-int stackDepth = 2;
+int stackDepth = 100;
 // should node functions be traced
 bool traceNode = false;
 
 bool isInit = false;
 void CleanupAtExit() {
+  std::string filename = "func_" + std::to_string(getpid()) + ".tsv";
+
   // Open the file with the constructed filename
-  FILE* cgFile = fopen("func.tsv", "w");
+  FILE* cgFile = fopen(filename.c_str(), "w");
   // fprintf(cgFile, "stack\tfunc_id\n");
   for (const auto& cg : funcs) {
     fprintf(cgFile, "%s\n", cg.c_str());
@@ -1437,10 +1439,10 @@ void create_and_add_func_name(uint32_t func_id, const FunctionLiteral* literal,
   funcName.push_back('\t');
 
   // Append name
-  if (isConstructor) {
-    funcName.append("new ");
-  }
   funcName.append(debug_name);
+  if (isConstructor) {
+    funcName.append(".constructor");
+  }
   funcName.push_back('\t');
 
   // Append function_key
@@ -1523,7 +1525,8 @@ void BytecodeGenerator::GenerateBytecodeBody() {
     if (toTrace) {
       int start_position = literal->start_position();
       int end_position = literal->end_position();
-      std::string functionKey = std::to_string(start_position) + "\t" +
+      std::string functionKey = std::to_string(literal->function_literal_id()) +
+                                "\t" + std::to_string(start_position) + "\t" +
                                 std::to_string(end_position) + "\t" + path;
       int func_id = -1;
       if (funcMap.find(functionKey) == funcMap.end()) {
@@ -1565,7 +1568,8 @@ void BytecodeGenerator::BuildReturn(int source_position) {
       auto literal = info()->literal();
       int start_position = literal->start_position();
       int end_position = literal->end_position();
-      std::string functionKey = std::to_string(start_position) + "\t" +
+      std::string functionKey = std::to_string(literal->function_literal_id()) +
+                                "\t" + std::to_string(start_position) + "\t" +
                                 std::to_string(end_position) + "\t" + path;
       int func_id = funcMap[functionKey];
       RegisterAllocationScope register_scope(this);
@@ -1578,13 +1582,6 @@ void BytecodeGenerator::BuildReturn(int source_position) {
           .CallRuntime(Runtime::kTraceExit, result);
     }
   }
-  // if (v8_flags.trace) {
-  //   RegisterAllocationScope register_scope(this);
-  //   Register result = register_allocator()->NewRegister();
-  //   // Runtime returns {result} value, preserving accumulator.
-  //   builder()->StoreAccumulatorInRegister(result).CallRuntime(
-  //       Runtime::kTraceExit, result);
-  // }
   builder()->SetStatementPosition(source_position);
   builder()->Return();
 }

@@ -1245,10 +1245,12 @@ std::ofstream outFile;
 uint32_t collectStackDepth = 0;
 bool isInit = false;
 
-constexpr size_t BUFFER_SIZE = 5 * 1024 * 1024;  // 5 MB buffer
+constexpr size_t BUFFER_SIZE = 1024 * 1024;  // 512 MB buffer
 std::array<char, BUFFER_SIZE> buffer;
 size_t bufferPos = 0;
+
 std::map<StackFrameId, int> frameMap;
+std::unordered_set<std::string> printedTraces;
 
 void FlushBuffer() {
   if (bufferPos > 0) {
@@ -1296,7 +1298,11 @@ RUNTIME_FUNCTION(Runtime_TraceEnter) {
 
   if (!isInit) {
     isInit = true;
-    outFile.open("cg.tsv", std::ios::out | std::ios::binary);
+    // Construct the filename with the time postfix
+    std::string filename = "cg_" + std::to_string(getpid()) + ".tsv";
+
+    // Open the file with the constructed filename
+    outFile.open(filename);
     outFile.rdbuf()->pubsetbuf(nullptr, 0);  // Disable stream buffering
     collectStackDepth = NumberToUint32(args[0]);
     std::atexit(SaveAtExit);
@@ -1305,30 +1311,39 @@ RUNTIME_FUNCTION(Runtime_TraceEnter) {
   uint32_t funcId = NumberToUint32(args[1]);
 
   if (collectStackDepth > 1) {
+    std::string stackTrace;
+    stackTrace.reserve(40);
+
     JavaScriptStackFrameIterator it(isolate);
     int level = 0;
     while (!it.done()) {
       if (level > 0) {
-        AppendCharToBuffer(',');
+        stackTrace += ',';
       }
       StackFrameId frameId = it.frame()->id();
       if (frameMap.find(frameId) != frameMap.end() ||
           level > collectStackDepth) {
-        AppendIntToBuffer(frameMap[frameId]);
+        stackTrace += std::to_string(frameMap[frameId]);
         break;
       }
       int new_frame_id = frameMap.size();
       frameMap[frameId] = new_frame_id;
-      AppendIntToBuffer(new_frame_id);
+      stackTrace += std::to_string(new_frame_id);
       ++level;
       it.Advance();
     }
-    AppendCharToBuffer('\t');
+    stackTrace += '\t';
+    stackTrace += std::to_string(funcId);
+    if (printedTraces.insert(stackTrace).second) {
+      // This is a new stack trace, so we print it
+    }
+    AppendToBuffer(stackTrace.c_str(), stackTrace.length());
+    AppendCharToBuffer('\n');
   } else {
     AppendCharToBuffer('I');
+    AppendIntToBuffer(funcId);
+    AppendCharToBuffer('\n');
   }
-  AppendIntToBuffer(funcId);
-  AppendCharToBuffer('\n');
 
   return ReadOnlyRoots(isolate).undefined_value();
 }
