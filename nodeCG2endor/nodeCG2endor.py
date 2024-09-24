@@ -2,15 +2,25 @@ import sys
 import os
 import json
 
-def func2name(data):
+def func2name(data, known_funcs):
+  prefix = ''
+  for k, v in known_funcs.items():
+    if (v['id'] == data['id'] and v['position']['file'] == data['position']['file']) or v['position']['file'] != data['position']['file'] or v['position']['start'] == 0:
+      continue
+    if v['position']['file'] == data['position']['file'] and v['position']['start'] <= data['position']['start'] and v['position']['end'] >= data['position']['end']:
+      prefix = f"{v['func_prefix']}{v['func_name']}/"
   name = data['name']
   if name == "":
     if data['position']['start'] == 0:
       name = ''
     else:
-      name = f".anonymous_function_{data['position']['start']}_{data['position']['end']}"
+      name = f".anonymous_function_{data['position']['line']}_{data['position']['column']}"
+  else:
+    name += f"_{data['position']['line']}_{data['position']['column']}"
+  data['func_name'] = name
+  data['func_prefix'] = prefix
+  name = prefix + name
   if data['position']['file'].startswith('node:'):
-
     return f"node://node/[node:{data['position']['file'].replace('node:', 
     '')}]/{name}()"
   pack, version, pack_f_path = get_package_npm_version(data['position']['file'])
@@ -30,7 +40,10 @@ def get_package_npm_version(p):
             data = json.load(f)
             if 'name' not in data or 'version' not in data:
               continue
-            package_cache[pp+package] = (data['name'], data['version'], package)
+            name = data['name']
+            if ('/' in name):
+              name = name.replace('/', '::')
+            package_cache[pp+package] = (name, data['version'], package)
             return package_cache[pp+package]
     p_split = p_split[:p_split_len-1-i]
   return ('<name>', '<version>', p)
@@ -41,25 +54,27 @@ def readFuncInfoFile(p='func.tsv'):
     with open(p, 'r') as f:
       for line in f:
         line = line.rstrip()
-        (func_id, func_name, func_file_id, start, end, file) =  line.split('\t')
+        (func_id, func_name, line_nb, column, func_file_id, start, end, file) =  line.split('\t')
         file = file.strip().replace('file://', '')
         func_id = int(func_id)
         func_key = f"{func_file_id}_{start}_{end}_{file}"
         out[func_key] = {
-            'id': func_id,
+            'id': int(func_id),
             'name': func_name,
             'internal': 'node_modules' not in file and not file.startswith('node:'),
             'position': {
+              'line': int(line_nb),
+              'column': int(column),
               'start': int(start),
               'end': int(end),
               'file': file
             }
           }
-        out[func_key]['uri'] = func2name(out[func_key])
+        out[func_key]['uri'] = func2name(out[func_key], out)
     return out
 
 def readCGFile(global_id_map, p='cg.tsv', function_calls={}):
-  print("process ", p)
+  print(f"Process file: {p}")
   stack_2_func = {}
   stack_parents = {}
   call_in_stack = []
