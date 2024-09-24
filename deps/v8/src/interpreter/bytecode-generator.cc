@@ -4,6 +4,8 @@
 
 #include "src/interpreter/bytecode-generator.h"
 
+#include <unistd.h>
+
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -1418,14 +1420,15 @@ void CleanupAtExit() {
 }
 
 void create_and_add_func_name(uint32_t func_id, const FunctionLiteral* literal,
+                              const Script::PositionInfo& info,
                               bool isConstructor, const char* function_key) {
   // Pre-calculate the total length of the string to avoid reallocations
   size_t total_length =
-      20;  // Estimated length for func_id, start_position, and end_position
+      24;  // Estimated length for func_id, start_position, and end_position
   const std::string& debug_name = literal->GetDebugName().get();
   total_length += debug_name.length();
   if (isConstructor) {
-    total_length += 4;  // "new "
+    total_length += 12;  // ".constructor "
   }
   total_length += std::strlen(function_key);
   total_length += 5;  // 5 tab characters
@@ -1443,6 +1446,12 @@ void create_and_add_func_name(uint32_t func_id, const FunctionLiteral* literal,
   if (isConstructor) {
     funcName.append(".constructor");
   }
+  funcName.push_back('\t');
+
+  funcName.append(std::to_string(info.line + 1));
+  funcName.push_back('\t');
+
+  funcName.append(std::to_string(info.column + 1));
   funcName.push_back('\t');
 
   // Append function_key
@@ -1516,23 +1525,41 @@ void BytecodeGenerator::GenerateBytecodeBody() {
   }
 
   // Emit tracing call if requested to do so.
-  if (!script_.is_null() && script_->name().IsString()) {
+  if (true) {
+    // closure_scope()->function_var();
     // Only trace js code
-    std::string path = String::cast(script_->name())
-                           .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
-                           .get();
-    bool toTrace = traceNode ? true : path.find("node:") != 0;
-    if (toTrace) {
+    std::string path =
+        !script_.is_null() && script_->name().IsString()
+            ? String::cast(script_->name())
+                  .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
+                  .get()
+            : "<unknown>";
+    bool toTrace =
+        traceNode ? true : path.find("node:") != 0 && !script_.is_null();
+    if (toTrace && literal->function_literal_id() != 0) {
       int start_position = literal->start_position();
       int end_position = literal->end_position();
       std::string functionKey = std::to_string(literal->function_literal_id()) +
                                 "\t" + std::to_string(start_position) + "\t" +
                                 std::to_string(end_position) + "\t" + path;
+      Script::PositionInfo info = Script::PositionInfo();
+      if (!script_.is_null()) {
+        int position = literal->function_token_position();
+        if (position == kNoSourcePosition) {
+          position = literal->position();
+        }
+        if (position == kNoSourcePosition) {
+          position = literal->start_position();
+        }
+        if (position != kNoSourcePosition) {
+          Script::GetPositionInfo(script_, position, &info, Script::NO_OFFSET);
+        }
+      }
       int func_id = -1;
       if (funcMap.find(functionKey) == funcMap.end()) {
         func_id = funcID++;
         funcMap[functionKey] = func_id;
-        create_and_add_func_name(func_id, literal, isConstructor,
+        create_and_add_func_name(func_id, literal, info, isConstructor,
                                  functionKey.c_str());
       } else {
         func_id = funcMap[functionKey];

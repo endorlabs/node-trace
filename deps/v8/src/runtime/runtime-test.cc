@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include <stdio.h>
+#include <unistd.h>
 
 #include <cstdlib>
 #include <ctime>
@@ -1336,9 +1337,9 @@ RUNTIME_FUNCTION(Runtime_TraceEnter) {
     stackTrace += std::to_string(funcId);
     if (printedTraces.insert(stackTrace).second) {
       // This is a new stack trace, so we print it
+      AppendToBuffer(stackTrace.c_str(), stackTrace.length());
+      AppendCharToBuffer('\n');
     }
-    AppendToBuffer(stackTrace.c_str(), stackTrace.length());
-    AppendCharToBuffer('\n');
   } else {
     AppendCharToBuffer('I');
     AppendIntToBuffer(funcId);
