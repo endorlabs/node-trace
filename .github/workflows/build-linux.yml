@@ -1,0 +1,43 @@
+name: Build Linux
+
+on:
+  pull_request:
+    paths-ignore:
+      - README.md
+      - .github/**
+      - '!.github/workflows/test-linux.yml'
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - trace
+      - main
+      - canary
+      - v[0-9]+.x-staging
+      - v[0-9]+.x
+    paths-ignore:
+      - README.md
+      - .github/**
+      - '!.github/workflows/test-linux.yml'
+
+env:
+  NODE_VERSION: lts/*
+permissions:
+  contents: read
+jobs:
+  build-lto:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+        with:
+          persist-credentials: false
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8  # v4.0.2
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Environment Information
+        run: npx envinfo
+      - name: Build lto
+        run: |
+          sudo apt-get update && sudo apt-get install ninja-build -y
+          ./configure --enable-lto --ninja
+          ninja -C out/Release
