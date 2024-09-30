@@ -1398,13 +1398,13 @@ void BytecodeGenerator::GenerateBytecode(uintptr_t stack_limit) {
 // the function information
 std::vector<std::string> funcs;
 // the function information
-std::map<std::string, int> funcMap;
+std::map<std::string, uint32_t> func2id;
 // the incremental ID of the functions
-int funcID = 0;
+uint32_t global_func_id = 0;
 // the depth of the stack to collect
 int stackDepth = 100;
 // should node functions be traced
-bool traceNode = false;
+bool trace_all = false;
 
 bool isInit = false;
 void CleanupAtExit() {
@@ -1468,7 +1468,7 @@ void BytecodeGenerator::GenerateBytecodeBody() {
       stackDepth = std::stoi(traceDepthEnv);
     }
     isInit = true;
-    traceNode = std::getenv("TRACE_ALL") ? true : false;
+    trace_all = std::getenv("TRACE_ALL") ? true : false;
     atexit(CleanupAtExit);
   }
   // Build the arguments object if it is used.
@@ -1534,15 +1534,20 @@ void BytecodeGenerator::GenerateBytecodeBody() {
                   .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
                   .get()
             : "<unknown>";
-    bool toTrace =
-        traceNode ? true : path.find("node:") != 0 && !script_.is_null();
-    if (toTrace && literal->function_literal_id() != 0) {
+    bool to_trace = true;
+    if (!trace_all) {
+      to_trace = (path.find("node:") != 0 || path.find("node:timers") == 0) &&
+                path.find("/ts-node/") == -1 &&
+                path.find("/typescript/") == -1 && path.find("/npm/") == -1
+                && path.find("/source-map-support/") == -1;
+    }
+    if (to_trace) {
       int start_position = literal->start_position();
       int end_position = literal->end_position();
-      std::string functionKey = std::to_string(literal->function_literal_id()) +
+      std::string function_key = std::to_string(literal->function_literal_id()) +
                                 "\t" + std::to_string(start_position) + "\t" +
                                 std::to_string(end_position) + "\t" + path;
-      Script::PositionInfo info = Script::PositionInfo();
+      Script::PositionInfo pos = Script::PositionInfo();
       if (!script_.is_null()) {
         int position = literal->function_token_position();
         if (position == kNoSourcePosition) {
@@ -1552,17 +1557,17 @@ void BytecodeGenerator::GenerateBytecodeBody() {
           position = literal->start_position();
         }
         if (position != kNoSourcePosition) {
-          Script::GetPositionInfo(script_, position, &info, Script::NO_OFFSET);
+          Script::GetPositionInfo(script_, position, &pos, Script::NO_OFFSET);
         }
       }
-      int func_id = -1;
-      if (funcMap.find(functionKey) == funcMap.end()) {
-        func_id = funcID++;
-        funcMap[functionKey] = func_id;
-        create_and_add_func_name(func_id, literal, info, isConstructor,
-                                 functionKey.c_str());
+      uint32_t func_id = std::numeric_limits<uint32_t>::max();
+      if (func2id.find(function_key) == func2id.end()) {
+        func_id = global_func_id++;
+        func2id[function_key] = func_id;
+        create_and_add_func_name(func_id, literal, pos, isConstructor,
+                                 function_key.c_str());
       } else {
-        func_id = funcMap[functionKey];
+        func_id = func2id[function_key];
       }
       RegisterList args = register_allocator()->NewRegisterList(2);
       builder()
@@ -1590,15 +1595,15 @@ void BytecodeGenerator::BuildReturn(int source_position) {
     std::string path = String::cast(script_->name())
                            .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
                            .get();
-    bool toTrace = traceNode ? true : path.find("node:") != 0;
+    bool toTrace = trace_all ? true : path.find("node:") != 0;
     if (toTrace && stackDepth < 2) {
       auto literal = info()->literal();
       int start_position = literal->start_position();
       int end_position = literal->end_position();
-      std::string functionKey = std::to_string(literal->function_literal_id()) +
+      std::string function_key = std::to_string(literal->function_literal_id()) +
                                 "\t" + std::to_string(start_position) + "\t" +
                                 std::to_string(end_position) + "\t" + path;
-      int func_id = funcMap[functionKey];
+      int func_id = func2id[function_key];
       RegisterAllocationScope register_scope(this);
       // Runtime returns {result} value, preserving accumulator.
       RegisterList result = register_allocator()->NewRegisterList(2);

@@ -14,17 +14,19 @@ def func2name(data, known_funcs):
     if data['position']['start'] == 0:
       name = ''
     else:
-      name = f".anonymous_function_{data['position']['line']}_{data['position']['column']}"
-  else:
-    name += f"_{data['position']['line']}_{data['position']['column']}"
+      name = f"anonymous_function_{data['position']['line']}_{data['position']['column']}"
+  # else:
+  #   name += f"_{data['position']['line']}_{data['position']['column']}"
+  name += "()"
+  name = name.replace("Object.<anonymous>.","").replace(".","/")
   data['func_name'] = name
   data['func_prefix'] = prefix
   name = prefix + name
   if data['position']['file'].startswith('node:'):
     return f"node://node/[node:{data['position']['file'].replace('node:', 
-    '')}]/{name}()"
+    '')}]/{name}"
   pack, version, pack_f_path = get_package_npm_version(data['position']['file'])
-  return f"javascript://{pack}${version}/[{pack}:{version}:{pack_f_path.replace(".js", "")}]/{name}()"
+  return f"javascript://{pack}${version}/[{pack}:{version}:{pack_f_path.replace(".js", "")}]/{name}"
 
 package_cache = {}
 def get_package_npm_version(p):
@@ -75,8 +77,6 @@ def readFuncInfoFile(p='func.tsv'):
 
 def readCGFile(global_id_map, p='cg.tsv', function_calls={}):
   print(f"Process file: {p}")
-  stack_2_func = {}
-  stack_parents = {}
   call_in_stack = []
   with open(p, 'r') as f:
     for line in f:
@@ -84,16 +84,16 @@ def readCGFile(global_id_map, p='cg.tsv', function_calls={}):
       if len(line) == 0:
          continue
       if line[0] in ['I', 'O']:
-        func_id = global_id_map[int(line[1:])]
+        called_func = global_id_map[int(line[1:])]
         if line[0] == 'I':
           if len(call_in_stack) > 0:
             if call_in_stack[-1] not in function_calls:
               function_calls[call_in_stack[-1]] = set()
-            function_calls[call_in_stack[-1]].add(func_id)
-          call_in_stack.append(func_id)
+            function_calls[call_in_stack[-1]].add(called_func)
+          call_in_stack.append(called_func)
         elif line[0] == 'O':
           index = len(call_in_stack) - 1
-          while call_in_stack[index] != func_id:
+          while call_in_stack[index] != called_func:
             call_in_stack.pop()
             index -= 1
           call_in_stack.pop()
@@ -101,22 +101,12 @@ def readCGFile(global_id_map, p='cg.tsv', function_calls={}):
         split_line = line.split('\t')
         if len(split_line) != 2:
           continue
-        (stack, func_id) = split_line
-        func_id = global_id_map[int(func_id)]
-        stack_ids = stack.split(',')
-        stack_id = int(stack_ids[0])
-        stack_parent = int(stack_ids[-1])
-        if stack_id in stack_parents:
-          stack_parent = stack_parents[stack_id]
-        else:
-          stack_parents[stack_id] = stack_parent
-          stack_2_func[stack_id] = func_id
-        if stack_parent is stack_id:
-          continue
-        if stack_parent in stack_2_func:
-          if stack_2_func[stack_parent] not in function_calls:
-            function_calls[stack_2_func[stack_parent]] = set()
-          function_calls[stack_2_func[stack_parent]].add(func_id)
+        (caller_funct, called_func) = split_line
+        called_func = global_id_map[int(called_func)]
+        caller_funct = global_id_map[int(caller_funct)]
+        if caller_funct not in function_calls:
+          function_calls[caller_funct] = set()
+        function_calls[caller_funct].add(called_func)
   return function_calls      
 
 def merge_func_infos(func_infos):
@@ -142,6 +132,8 @@ if __name__ == '__main__':
   for file in os.listdir(project_root):
     if file.endswith('.tsv') and file.startswith('func_'):
       proc = file.split('_')[1].replace('.tsv', '')
+      if not os.path.exists(os.path.join(project_root, f"cg_{proc}.tsv")):
+        continue
       func_infos[proc] = (readFuncInfoFile(os.path.join(project_root, file)))
   func_info, map_id = merge_func_infos(func_infos)
   

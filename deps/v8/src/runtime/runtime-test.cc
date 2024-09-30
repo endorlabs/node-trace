@@ -1250,8 +1250,31 @@ constexpr size_t BUFFER_SIZE = 1024 * 1024;  // 512 MB buffer
 std::array<char, BUFFER_SIZE> buffer;
 size_t bufferPos = 0;
 
-std::map<StackFrameId, int> frameMap;
-std::unordered_set<std::string> printedTraces;
+struct CallerId {
+  uint32_t callee = UINT32_MAX;
+  uint32_t caller = UINT32_MAX;
+
+  bool operator==(const CallerId& other) const {
+    return callee == other.callee && caller == other.caller;
+  }
+
+  std::size_t Hash() const {
+    return base::hash_combine(callee, caller);
+  }
+
+};
+
+// Custom hash function for CallerId
+struct CallerIdHash {
+  std::size_t operator()(const CallerId& id) const {
+    return id.Hash();
+  }
+};
+
+// Use the new structure in the unordered_set
+std::unordered_set<CallerId, CallerIdHash> known_calls;
+std::map<internal::Address, uint32_t> address2func;
+std::map<internal::Address, uint32_t> cb2func;
 
 void FlushBuffer() {
   if (bufferPos > 0) {
@@ -1309,40 +1332,67 @@ RUNTIME_FUNCTION(Runtime_TraceEnter) {
     std::atexit(SaveAtExit);
   }
 
-  uint32_t funcId = NumberToUint32(args[1]);
+  CallerId call_id;
+  call_id.callee = NumberToUint32(args[1]);
+  if (call_id.callee == std::numeric_limits<uint32_t>::max()) {
+    return ReadOnlyRoots(isolate).undefined_value();
+  }
 
   if (collectStackDepth > 1) {
-    std::string stackTrace;
-    stackTrace.reserve(40);
+    std::vector<internal::Address> cb;
 
     JavaScriptStackFrameIterator it(isolate);
     int level = 0;
     while (!it.done()) {
-      if (level > 0) {
-        stackTrace += ',';
+      auto frame = it.frame();
+      if (frame->is_java_script()) {
+        auto func = frame->function();
+        auto func_address = func.shared().address();
+        if (level == 0) {
+          address2func[func_address] = call_id.callee;
+          const int length = frame->ComputeParametersCount();
+          for (int i = 0; i < length; ++i) {
+            auto param = frame->GetParameter(i);
+            if (param.IsJSFunction()) {
+              cb.push_back(JSFunction::cast(param).shared().address());
+            }
+          }
+          // the cb is colled, add edge between the cb and the caller
+          if (cb2func.find(func_address) != cb2func.end()) {
+            AppendIntToBuffer(cb2func[func_address]);
+            AppendCharToBuffer('\t');
+            AppendIntToBuffer(call_id.callee);
+            AppendCharToBuffer('\n');
+          }
+        } else if (level >= 1) {
+          if (address2func.find(func_address) != address2func.end()) {
+            call_id.caller = address2func[func_address];
+            break;
+          }
+        }
       }
-      StackFrameId frameId = it.frame()->id();
-      if (frameMap.find(frameId) != frameMap.end() ||
-          level > collectStackDepth) {
-        stackTrace += std::to_string(frameMap[frameId]);
-        break;
-      }
-      int new_frame_id = frameMap.size();
-      frameMap[frameId] = new_frame_id;
-      stackTrace += std::to_string(new_frame_id);
       ++level;
       it.Advance();
     }
-    stackTrace += '\t';
-    stackTrace += std::to_string(funcId);
-    if (printedTraces.insert(stackTrace).second) {
+    if (call_id.caller == UINT32_MAX) {
+      return ReadOnlyRoots(isolate).undefined_value();
+    }
+    // JavaScriptFrame::PrintTop(isolate, stdout, false, true);
+    if (known_calls.insert(call_id).second) {
       // This is a new stack trace, so we print it
-      AppendToBuffer(stackTrace.c_str(), stackTrace.length());
+      AppendIntToBuffer(call_id.caller);
+      AppendCharToBuffer('\t');
+      AppendIntToBuffer(call_id.callee);
       AppendCharToBuffer('\n');
+    }
+    if (cb.size() > 0) {
+      for (auto& c : cb) {
+        cb2func[c] = call_id.caller;
+      }
     }
   } else {
     AppendCharToBuffer('I');
-    AppendIntToBuffer(funcId);
+    AppendIntToBuffer(call_id.callee);
     AppendCharToBuffer('\n');
   }
 
