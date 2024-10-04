@@ -56,7 +56,7 @@ def readFuncInfoFile(p='func.tsv'):
     with open(p, 'r') as f:
       for line in f:
         line = line.rstrip()
-        (func_id, func_name, line_nb, column, func_file_id, start, end, file) =  line.split('\t')
+        (func_id, func_name, line_nb, column, func_file_id, start, end, file, time) =  line.split('\t')
         file = file.strip().replace('file://', '')
         func_id = int(func_id)
         func_key = f"{func_file_id}_{start}_{end}_{file}"
@@ -99,9 +99,9 @@ def readCGFile(global_id_map, p='cg.tsv', function_calls={}):
           call_in_stack.pop()
       else:
         split_line = line.split('\t')
-        if len(split_line) != 2:
+        if len(split_line) != 3:
           continue
-        (caller_funct, called_func) = split_line
+        (caller_funct, called_func, time) = split_line
         called_func = global_id_map[int(called_func)]
         caller_funct = global_id_map[int(caller_funct)]
         if caller_funct not in function_calls:

@@ -30,6 +30,7 @@
 #include "src/interpreter/control-flow-builders.h"
 #include "src/logging/local-logger.h"
 #include "src/logging/log.h"
+#include "src/monitor/monitor.h"
 #include "src/numbers/conversions.h"
 #include "src/objects/debug-objects.h"
 #include "src/objects/smi.h"
@@ -1395,82 +1396,7 @@ void BytecodeGenerator::GenerateBytecode(uintptr_t stack_limit) {
   DCHECK(builder()->RemainderOfBlockIsDead());
 }
 
-// the function information
-std::vector<std::string> funcs;
-// the function information
-std::map<std::string, uint32_t> func2id;
-// the incremental ID of the functions
-uint32_t global_func_id = 0;
-// the depth of the stack to collect
-int stackDepth = 100;
-// should node functions be traced
-bool trace_all = false;
-
-bool isInit = false;
-void CleanupAtExit() {
-  std::string filename = "func_" + std::to_string(getpid()) + ".tsv";
-
-  // Open the file with the constructed filename
-  FILE* cgFile = fopen(filename.c_str(), "w");
-  // fprintf(cgFile, "stack\tfunc_id\n");
-  for (const auto& cg : funcs) {
-    fprintf(cgFile, "%s\n", cg.c_str());
-  }
-  fclose(cgFile);
-}
-
-void create_and_add_func_name(uint32_t func_id, const FunctionLiteral* literal,
-                              const Script::PositionInfo& info,
-                              bool isConstructor, const char* function_key) {
-  // Pre-calculate the total length of the string to avoid reallocations
-  size_t total_length =
-      24;  // Estimated length for func_id, start_position, and end_position
-  const std::string& debug_name = literal->GetDebugName().get();
-  total_length += debug_name.length();
-  if (isConstructor) {
-    total_length += 12;  // ".constructor "
-  }
-  total_length += std::strlen(function_key);
-  total_length += 5;  // 5 tab characters
-
-  // Create a single string with the calculated capacity
-  std::string funcName;
-  funcName.reserve(total_length);
-
-  // Append func_id
-  funcName.append(std::to_string(func_id));
-  funcName.push_back('\t');
-
-  // Append name
-  funcName.append(debug_name);
-  if (isConstructor) {
-    funcName.append(".constructor");
-  }
-  funcName.push_back('\t');
-
-  funcName.append(std::to_string(info.line + 1));
-  funcName.push_back('\t');
-
-  funcName.append(std::to_string(info.column + 1));
-  funcName.push_back('\t');
-
-  // Append function_key
-  funcName.append(function_key);
-
-  // Add to funcs vector
-  funcs.push_back(std::move(funcName));
-}
-
 void BytecodeGenerator::GenerateBytecodeBody() {
-  if (!isInit) {
-    auto traceDepthEnv = std::getenv("TRACE_DEPTH");
-    if (traceDepthEnv) {
-      stackDepth = std::stoi(traceDepthEnv);
-    }
-    isInit = true;
-    trace_all = std::getenv("TRACE_ALL") ? true : false;
-    atexit(CleanupAtExit);
-  }
   // Build the arguments object if it is used.
   VisitArgumentsObject(closure_scope()->arguments());
 
@@ -1523,60 +1449,18 @@ void BytecodeGenerator::GenerateBytecodeBody() {
                                         builder()->Receiver());
     }
   }
-
+  auto func_id =
+      g_bytecode_monitor.TraceFunctionCreation(script_, literal,
+      isConstructor);
   // Emit tracing call if requested to do so.
-  if (true) {
-    // closure_scope()->function_var();
-    // Only trace js code
-    std::string path =
-        !script_.is_null() && script_->name().IsString()
-            ? String::cast(script_->name())
-                  .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
-                  .get()
-            : "<unknown>";
-    bool to_trace = true;
-    if (!trace_all) {
-      to_trace = (path.find("node:") != 0 || path.find("node:timers") == 0) &&
-                path.find("/ts-node/") == -1 &&
-                path.find("/typescript/") == -1 && path.find("/npm/") == -1
-                && path.find("/source-map-support/") == -1;
-    }
-    if (to_trace) {
-      int start_position = literal->start_position();
-      int end_position = literal->end_position();
-      std::string function_key = std::to_string(literal->function_literal_id()) +
-                                "\t" + std::to_string(start_position) + "\t" +
-                                std::to_string(end_position) + "\t" + path;
-      Script::PositionInfo pos = Script::PositionInfo();
-      if (!script_.is_null()) {
-        int position = literal->function_token_position();
-        if (position == kNoSourcePosition) {
-          position = literal->position();
-        }
-        if (position == kNoSourcePosition) {
-          position = literal->start_position();
-        }
-        if (position != kNoSourcePosition) {
-          Script::GetPositionInfo(script_, position, &pos, Script::NO_OFFSET);
-        }
-      }
-      uint32_t func_id = std::numeric_limits<uint32_t>::max();
-      if (func2id.find(function_key) == func2id.end()) {
-        func_id = global_func_id++;
-        func2id[function_key] = func_id;
-        create_and_add_func_name(func_id, literal, pos, isConstructor,
-                                 function_key.c_str());
-      } else {
-        func_id = func2id[function_key];
-      }
-      RegisterList args = register_allocator()->NewRegisterList(2);
-      builder()
-          ->LoadLiteral(func_id)
-          .StoreAccumulatorInRegister(args[1])
-          .LoadLiteral(stackDepth)
-          .StoreAccumulatorInRegister(args[0])
-          .CallRuntime(Runtime::kTraceEnter, args);
-    }
+  if (g_bytecode_monitor.stack_collect && func_id != UINT32_MAX) {
+    RegisterList args = register_allocator()->NewRegisterList(2);
+    builder()
+        ->LoadLiteral(func_id)
+        .StoreAccumulatorInRegister(args[1])
+        .LoadLiteral(g_bytecode_monitor.stack_depth)
+        .StoreAccumulatorInRegister(args[0])
+        .CallRuntime(Runtime::kTraceEnter, args);
   }
   // Visit statements in the function body.
   VisitStatements(literal->body());
@@ -1590,29 +1474,18 @@ void BytecodeGenerator::GenerateBytecodeBody() {
 }
 
 void BytecodeGenerator::BuildReturn(int source_position) {
-  // only trace return if the stack is not collected
-  if (!script_.is_null() && script_->name().IsString()) {
-    std::string path = String::cast(script_->name())
-                           .ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL)
-                           .get();
-    bool toTrace = trace_all ? true : path.find("node:") != 0;
-    if (toTrace && stackDepth < 2) {
-      auto literal = info()->literal();
-      int start_position = literal->start_position();
-      int end_position = literal->end_position();
-      std::string function_key = std::to_string(literal->function_literal_id()) +
-                                "\t" + std::to_string(start_position) + "\t" +
-                                std::to_string(end_position) + "\t" + path;
-      int func_id = func2id[function_key];
-      RegisterAllocationScope register_scope(this);
-      // Runtime returns {result} value, preserving accumulator.
-      RegisterList result = register_allocator()->NewRegisterList(2);
-      builder()
-          ->StoreAccumulatorInRegister(result[1])
-          .LoadLiteral(func_id)
-          .StoreAccumulatorInRegister(result[0])
-          .CallRuntime(Runtime::kTraceExit, result);
-    }
+  auto func_id = g_bytecode_monitor.TraceReturnFunctionCreation(
+      script_, info()->literal());
+  // Emit tracing call if requested to do so.
+  if (g_bytecode_monitor.stack_collect && func_id != UINT32_MAX) {
+    RegisterAllocationScope register_scope(this);
+    // Runtime returns {result} value, preserving accumulator.
+    RegisterList result = register_allocator()->NewRegisterList(2);
+    builder()
+        ->StoreAccumulatorInRegister(result[1])
+        .LoadLiteral(func_id)
+        .StoreAccumulatorInRegister(result[0])
+        .CallRuntime(Runtime::kTraceExit, result);
   }
   builder()->SetStatementPosition(source_position);
   builder()->Return();

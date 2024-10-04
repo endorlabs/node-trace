@@ -34,6 +34,7 @@
 #ifdef V8_ENABLE_MAGLEV
 #include "src/maglev/maglev-concurrent-dispatcher.h"
 #endif  // V8_ENABLE_MAGLEV
+#include "src/monitor/monitor.h"
 #include "src/objects/js-atomics-synchronization-inl.h"
 #include "src/objects/js-function-inl.h"
 #include "src/objects/js-regexp-inl.h"
@@ -1242,172 +1243,26 @@ RUNTIME_FUNCTION(Runtime_DisassembleFunction) {
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
-std::ofstream outFile;
-uint32_t collectStackDepth = 0;
-bool isInit = false;
-
-constexpr size_t BUFFER_SIZE = 1024 * 1024;  // 512 MB buffer
-std::array<char, BUFFER_SIZE> buffer;
-size_t bufferPos = 0;
-
-struct CallerId {
-  uint32_t callee = UINT32_MAX;
-  uint32_t caller = UINT32_MAX;
-
-  bool operator==(const CallerId& other) const {
-    return callee == other.callee && caller == other.caller;
-  }
-
-  std::size_t Hash() const {
-    return base::hash_combine(callee, caller);
-  }
-
-};
-
-// Custom hash function for CallerId
-struct CallerIdHash {
-  std::size_t operator()(const CallerId& id) const {
-    return id.Hash();
-  }
-};
-
-// Use the new structure in the unordered_set
-std::unordered_set<CallerId, CallerIdHash> known_calls;
-std::map<internal::Address, uint32_t> address2func;
-std::map<internal::Address, uint32_t> cb2func;
-
-void FlushBuffer() {
-  if (bufferPos > 0) {
-    outFile.write(buffer.data(), bufferPos);
-    bufferPos = 0;
-  }
-}
-
-void SaveAtExit() {
-  FlushBuffer();
-  if (outFile.is_open()) {
-    outFile.close();
-  }
-}
-
-inline void AppendToBuffer(const char* data, size_t length) {
-  if (bufferPos + length > BUFFER_SIZE) {
-    FlushBuffer();
-  }
-  std::memcpy(buffer.data() + bufferPos, data, length);
-  bufferPos += length;
-}
-
-inline void AppendCharToBuffer(char c) {
-  if (bufferPos + 1 > BUFFER_SIZE) {
-    FlushBuffer();
-  }
-  buffer[bufferPos++] = c;
-}
-
-// Fast integer to string conversion
-inline void AppendIntToBuffer(uint64_t value) {
-  char tmp[20];
-  char* p = tmp + 19;
-  do {
-    *p-- = '0' + (value % 10);
-    value /= 10;
-  } while (value > 0);
-  AppendToBuffer(p + 1, tmp + 19 - p);
-}
-
 RUNTIME_FUNCTION(Runtime_TraceEnter) {
   SealHandleScope shs(isolate);
-  DCHECK_EQ(1, args.length());
+  DCHECK_EQ(2, args.length());
 
-  if (!isInit) {
-    isInit = true;
-    // Construct the filename with the time postfix
-    std::string filename = "cg_" + std::to_string(getpid()) + ".tsv";
-
-    // Open the file with the constructed filename
-    outFile.open(filename);
-    outFile.rdbuf()->pubsetbuf(nullptr, 0);  // Disable stream buffering
-    collectStackDepth = NumberToUint32(args[0]);
-    std::atexit(SaveAtExit);
-  }
-
-  CallerId call_id;
-  call_id.callee = NumberToUint32(args[1]);
-  if (call_id.callee == std::numeric_limits<uint32_t>::max()) {
+  uint32_t callee = NumberToUint32(args[1]);
+  if (callee == std::numeric_limits<uint32_t>::max()) {
     return ReadOnlyRoots(isolate).undefined_value();
   }
-
-  if (collectStackDepth > 1) {
-    std::vector<internal::Address> cb;
-
-    JavaScriptStackFrameIterator it(isolate);
-    int level = 0;
-    while (!it.done()) {
-      auto frame = it.frame();
-      if (frame->is_java_script()) {
-        auto func = frame->function();
-        auto func_address = func.shared().address();
-        if (level == 0) {
-          address2func[func_address] = call_id.callee;
-          const int length = frame->ComputeParametersCount();
-          for (int i = 0; i < length; ++i) {
-            auto param = frame->GetParameter(i);
-            if (param.IsJSFunction()) {
-              cb.push_back(JSFunction::cast(param).shared().address());
-            }
-          }
-          // the cb is colled, add edge between the cb and the caller
-          if (cb2func.find(func_address) != cb2func.end()) {
-            AppendIntToBuffer(cb2func[func_address]);
-            AppendCharToBuffer('\t');
-            AppendIntToBuffer(call_id.callee);
-            AppendCharToBuffer('\n');
-          }
-        } else if (level >= 1) {
-          if (address2func.find(func_address) != address2func.end()) {
-            call_id.caller = address2func[func_address];
-            break;
-          }
-        }
-      }
-      ++level;
-      it.Advance();
-    }
-    if (call_id.caller == UINT32_MAX) {
-      return ReadOnlyRoots(isolate).undefined_value();
-    }
-    // JavaScriptFrame::PrintTop(isolate, stdout, false, true);
-    if (known_calls.insert(call_id).second) {
-      // This is a new stack trace, so we print it
-      AppendIntToBuffer(call_id.caller);
-      AppendCharToBuffer('\t');
-      AppendIntToBuffer(call_id.callee);
-      AppendCharToBuffer('\n');
-    }
-    if (cb.size() > 0) {
-      for (auto& c : cb) {
-        cb2func[c] = call_id.caller;
-      }
-    }
-  } else {
-    AppendCharToBuffer('I');
-    AppendIntToBuffer(call_id.callee);
-    AppendCharToBuffer('\n');
+  if (!g_runtime_monitor.IsInitialized()) {
+    uint32_t stack_depth = NumberToUint32(args[0]);
+    g_runtime_monitor.Initialize(stack_depth);
   }
-
+  g_runtime_monitor.TraceEnter(callee, isolate);
   return ReadOnlyRoots(isolate).undefined_value();
 }
 
 RUNTIME_FUNCTION(Runtime_TraceExit) {
   SealHandleScope shs(isolate);
   DCHECK_EQ(2, args.length());
-  if (collectStackDepth < 2) {
-    uint32_t funcId = NumberToUint32(args[0]);
-    AppendCharToBuffer('O');
-    AppendIntToBuffer(funcId);
-    AppendCharToBuffer('\n');
-  }
+  g_runtime_monitor.TraceExit(NumberToUint32(args[0]));
   return args[1];
 }
 

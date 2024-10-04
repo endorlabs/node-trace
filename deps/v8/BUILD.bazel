@@ -1664,6 +1664,8 @@ filegroup(
         "src/json/json-parser.h",
         "src/json/json-stringifier.cc",
         "src/json/json-stringifier.h",
+        "src/monitor/monitor.cc",
+        "src/monitor/monitor.h",
         "src/logging/code-events.h",
         "src/logging/counters-definitions.h",
         "src/logging/counters.cc",

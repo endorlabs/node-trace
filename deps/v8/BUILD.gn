@@ -4864,6 +4864,8 @@ v8_source_set("v8_base_without_compiler") {
     "src/json/json-parser.cc",
     "src/json/json-stringifier.cc",
     "src/libsampler/sampler.cc",
+    "src/monitor/monitor.cc",
+    "src/monitor/monitor.h",
     "src/logging/counters.cc",
     "src/logging/local-logger.cc",
     "src/logging/log-file.cc",
